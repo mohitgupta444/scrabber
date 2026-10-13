@@ -1,0 +1,15 @@
+export const scrapCategories = [
+  { id: 'newspaper', name: 'Newspaper', icon: '📰' },
+  { id: 'cardboard', name: 'Cardboard', icon: '📦' },
+  { id: 'paper', name: 'Paper', icon: '📄' },
+  { id: 'plastic', name: 'Plastic', icon: '♻️' },
+  { id: 'iron', name: 'Iron', icon: '🛠️' },
+  { id: 'steel', name: 'Steel', icon: '🔩' },
+  { id: 'aluminium', name: 'Aluminium', icon: '🏷️' },
+  { id: 'copper', name: 'Copper', icon: '🟠' },
+  { id: 'ewaste', name: 'E-waste', icon: '💻' },
+  { id: 'appliances', name: 'Appliances', icon: '🧰' },
+  { id: 'furniture', name: 'Furniture', icon: '🪑' },
+  { id: 'mixed', name: 'Mixed Scrap', icon: '🧱' },
+  { id: 'other', name: 'Other', icon: '📌' },
+]
