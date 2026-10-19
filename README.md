@@ -21,6 +21,10 @@ ScrapConnect is a React + Vite marketplace frontend backed by Supabase. Authenti
 
    Only the public publishable/anon key belongs in this frontend. Never put a service-role key or other secret in a `VITE_` variable.
 
+## AI assistant and photo estimates
+
+The floating AI assistant requires a deployed `scrap-ai` Supabase Edge Function and a Mistral API key stored only as a Supabase Function secret. Set it with `supabase secrets set MISTRAL_API_KEY=your-mistral-api-key`, then deploy with `supabase functions deploy scrap-ai`. Do not add the Mistral key to `.env.local` or any `VITE_` variable. The function checks the signed-in user, includes only that account's recent pickup records in chat context, and calculates photo value ranges from the current `scrap_prices` table. Photo weight and value are estimates; physical weighing determines the final amount.
+
 4. Create a normal account using the app. To provision the first administrator, confirm that account and run this in the SQL Editor, replacing the email:
 
    ```sql
@@ -64,7 +68,7 @@ Restart Vite after changing `.env.local`.
 - Verified dealers see privacy-limited open requests. Accept is an atomic database operation so a request can only be assigned once. Customer contact and full address become available to the assigned dealer. Dealer directory results expose only the fields needed by the public listing, through scoped database functions.
 - Pickup status and dealer-location changes update over Supabase Realtime.
 - A private per-pickup chat is available to the customer and assigned dealer while a pickup is active. Chat access closes when the pickup is completed or cancelled.
-- Actual weight and final amount are recorded when the dealer completes a pickup. Price estimates are loaded from the database; the database recalculates the stored estimate on insert.
+- Actual weight and final amount are recorded when the dealer completes a pickup. Price estimates are loaded from the database; the database recalculates the stored estimate on insert. The AI assistant answers questions using the signed-in account recent pickups and platform prices, and estimates scrap type, weight range, and value from an uploaded photo.
 - Customer transaction history, wallet totals, notifications, nearby dealer views, administrator statistics, and dealer verification read/write the connected project.
 
 ## Backend notes

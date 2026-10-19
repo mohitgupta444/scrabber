@@ -2,6 +2,7 @@
 import {
   ArrowRight,
   Bell,
+  Bot,
   Check,
   ChevronRight,
   CircleCheckBig,
@@ -9,6 +10,7 @@ import {
   CreditCard,
   FileText,
   Gauge,
+  ImagePlus,
   LayoutDashboard,
   LogOut,
   MapPinned,
@@ -20,12 +22,15 @@ import {
   RefreshCw,
   Recycle,
   Search,
+  Send,
   ShieldCheck,
+  Sparkles,
   Star,
   TrendingUp,
   Truck,
   User,
   Wallet,
+  X,
 } from 'lucide-react'
 import { CircleMarker, MapContainer, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet'
 import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
@@ -42,6 +47,7 @@ import { reviewService } from './services/reviewService'
 import { paymentService } from './services/paymentService'
 import { walletService } from './services/walletService'
 import { estimateScrapValue } from './utils/pricing'
+import { aiService } from './services/aiService'
 
 const formatCurrency = (value) => `₹${Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
 
@@ -77,6 +83,8 @@ function AppShell() {
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
 
+      <AiChatBot />
+
       {toast && (
         <div className="fixed right-4 top-4 z-50 rounded-2xl border border-emerald-200 bg-white px-4 py-3 shadow-soft">
           <div className="flex items-center gap-3">
@@ -91,6 +99,201 @@ function AppShell() {
   )
 }
 
+function ChatMarkdown({ content }) {
+  const renderInline = (text) => text.split(/(\*\*.+?\*\*|\*.+?\*|`[^`]+`)/g).filter(Boolean).map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>
+    if (part.startsWith('*') && part.endsWith('*')) return <em key={index}>{part.slice(1, -1)}</em>
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={index} className="rounded bg-slate-200 px-1 py-0.5 text-xs">{part.slice(1, -1)}</code>
+    return part
+  })
+  return <div className="space-y-1.5">{String(content).split(/\r?\n/).map((line, index) => {
+    const trimmed = line.trim()
+    if (!trimmed) return <div key={index} className="h-1" />
+    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/)
+    if (heading) return <p key={index} className="font-bold">{renderInline(heading[2])}</p>
+    const list = trimmed.match(/^([-*]|\d+\.)\s+(.+)$/)
+    if (list) {
+      const indent = Math.min(Math.floor((line.length - line.trimStart().length) / 2), 4)
+      return <p key={index} className="flex gap-1.5" style={{ marginLeft: indent * 10 }}><span>{/^\d+\./.test(list[1]) ? list[1] : '\u2022'}</span><span>{renderInline(list[2])}</span></p>
+    }
+    return <p key={index}>{renderInline(trimmed)}</p>
+  })}</div>
+}
+
+function AiChatBot() {
+  const { user } = useAuth()
+  const [open, setOpen] = useState(false)
+  const [conversations, setConversations] = useState([])
+  const [activeChatId, setActiveChatId] = useState(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [analysis, setAnalysis] = useState(null)
+  const [analysisImage, setAnalysisImage] = useState('')
+  const [historyOwner, setHistoryOwner] = useState(null)
+  const activeChat = conversations.find((chat) => chat.id === activeChatId)
+  const messages = activeChat?.messages || []
+
+  useEffect(() => () => {
+    if (analysisImage) URL.revokeObjectURL(analysisImage)
+  }, [analysisImage])
+
+  useEffect(() => {
+    if (!user?.id) {
+      setConversations([])
+      setActiveChatId(null)
+      setHistoryOwner(null)
+      return
+    }
+    const historyKey = `scrapconnect-ai-chats:${user.id}`
+    try {
+      let saved = JSON.parse(localStorage.getItem(historyKey) || 'null')
+      if (!Array.isArray(saved) || saved.length === 0) {
+        const oldMessages = JSON.parse(localStorage.getItem(`scrapconnect-ai-chat:${user.id}`) || '[]')
+        if (Array.isArray(oldMessages) && oldMessages.length) {
+          const firstQuestion = oldMessages.find((message) => message.role === 'user')?.content || 'Previous chat'
+          saved = [{ id: crypto.randomUUID(), title: firstQuestion.slice(0, 48), updatedAt: new Date().toISOString(), messages: oldMessages }]
+          localStorage.removeItem(`scrapconnect-ai-chat:${user.id}`)
+        }
+      }
+      const loaded = Array.isArray(saved) ? saved.filter((chat) => chat && chat.id && Array.isArray(chat.messages)).slice(0, 20) : []
+      setConversations(loaded)
+      setActiveChatId(loaded[0]?.id || null)
+    } catch {
+      setConversations([])
+      setActiveChatId(null)
+    }
+    setHistoryOwner(user.id)
+  }, [user?.id])
+
+  useEffect(() => {
+    if (!user?.id || historyOwner !== user.id) return
+    try {
+      let remainingMessages = 500
+      const saved = conversations.slice(0, 20).map((chat) => {
+        const keptMessages = remainingMessages > 0 ? chat.messages.slice(-remainingMessages) : []
+        remainingMessages = Math.max(0, remainingMessages - keptMessages.length)
+        return { ...chat, messages: keptMessages }
+      })
+      localStorage.setItem(`scrapconnect-ai-chats:${user.id}`, JSON.stringify(saved))
+    } catch {
+      setError('Chat history could not be saved in this browser.')
+    }
+  }, [user?.id, historyOwner, conversations])
+
+  const startNewChat = () => {
+    const id = crypto.randomUUID()
+    const chat = { id, title: 'New chat', updatedAt: new Date().toISOString(), messages: [] }
+    setConversations((current) => [chat, ...current].slice(0, 20))
+    setActiveChatId(id)
+    setHistoryOpen(false)
+    setAnalysis(null)
+    setAnalysisImage('')
+    setError('')
+  }
+
+  const openChat = (chat) => {
+    setActiveChatId(chat.id)
+    setHistoryOpen(false)
+    setAnalysis(null)
+    setAnalysisImage('')
+    setError('')
+  }
+
+  const sendMessage = async (event) => {
+    event?.preventDefault()
+    const content = draft.trim()
+    if (!content || busy || !user) return
+    const chatId = activeChatId || crypto.randomUUID()
+    const next = [...messages, { role: 'user', content }]
+    const currentChat = conversations.find((chat) => chat.id === chatId)
+    const firstQuestion = next.find((message) => message.role === 'user')?.content || content
+    const title = currentChat?.title && currentChat.title !== 'New chat' ? currentChat.title : firstQuestion.slice(0, 48)
+    setActiveChatId(chatId)
+    setConversations((current) => [{ id: chatId, title, updatedAt: new Date().toISOString(), messages: next }, ...current.filter((chat) => chat.id !== chatId)].slice(0, 20))
+    setDraft('')
+    setBusy(true)
+    setError('')
+    try {
+      const reply = await aiService.chatWithAI(next.slice(-20))
+      setConversations((current) => current.map((chat) => chat.id === chatId
+        ? { ...chat, updatedAt: new Date().toISOString(), messages: [...chat.messages, { role: 'assistant', content: reply }] }
+        : chat))
+    } catch (requestError) {
+      setError(requestError.message || 'Could not reach the AI assistant.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const analyzeImage = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!user) { setError('Sign in to analyze scrap photos.'); return }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+      setError('Choose a JPG, PNG, or WebP image up to 5 MB.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    setAnalysis(null)
+    setAnalysisImage(URL.createObjectURL(file))
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = () => reject(new Error('Could not read this image.'))
+        reader.readAsDataURL(file)
+      })
+      const result = await aiService.analyzeScrapImage(dataUrl.split(',')[1], file.type)
+      setAnalysis(result)
+    } catch (requestError) {
+      setError(requestError.message || 'Could not analyze this image.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="fixed bottom-5 right-5 z-40 flex flex-col items-end gap-3">
+      {open && <section className="flex h-[min(76vh,620px)] w-[min(92vw,390px)] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl" aria-label="ScrapConnect AI assistant">
+        <header className="flex items-center justify-between bg-emerald-700 px-4 py-3 text-white">
+          <div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15"><Bot className="h-5 w-5" /></span><div><p className="font-bold">Scrap assistant</p><p className="text-xs text-emerald-100">Orders, scrap & selling help</p></div></div>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={startNewChat} aria-label="New chat" title="New chat" className="rounded-full p-2 hover:bg-white/15"><Plus className="h-4 w-4" /></button>
+            <button type="button" onClick={() => setHistoryOpen((value) => !value)} aria-label="Chat history" aria-expanded={historyOpen} title="Chat history" className="rounded-full p-2 hover:bg-white/15"><Clock3 className="h-4 w-4" /></button>
+            <button type="button" onClick={() => setOpen(false)} aria-label="Close assistant" className="rounded-full p-2 hover:bg-white/15"><X className="h-4 w-4" /></button>
+          </div>
+        </header>
+        {user && historyOpen && <div className="max-h-44 shrink-0 space-y-1 overflow-y-auto border-b border-slate-200 bg-white p-2">
+          <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Recent chats</p>
+          {conversations.length === 0 && <p className="px-2 py-3 text-sm text-slate-500">No previous chats yet.</p>}
+          {conversations.map((chat) => <button key={chat.id} type="button" onClick={() => openChat(chat)} className={`w-full truncate rounded-xl px-3 py-2 text-left text-sm ${chat.id === activeChatId ? 'bg-emerald-50 font-semibold text-emerald-800' : 'text-slate-700 hover:bg-slate-50'}`}>{chat.title || 'New chat'}</button>)}
+        </div>}
+        {!user ? <div className="flex flex-1 flex-col items-center justify-center p-6 text-center"><Sparkles className="h-9 w-9 text-emerald-600" /><p className="mt-3 font-semibold text-slate-900">Sign in to chat</p><p className="mt-1 text-sm text-slate-500">Your assistant can answer pickup questions and analyze scrap photos after you sign in.</p><Link to="/login" onClick={() => setOpen(false)} className="mt-4 rounded-full bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white">Login / Sign up</Link></div> : <>
+          <div className="flex-1 space-y-3 overflow-y-auto p-4">
+            {messages.length === 0 && <div className="rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-900"><p className="font-semibold">Namaste{user.name ? ', ' + user.name.split(' ')[0] : ''}! Kaise madad karun?</p><p className="mt-1">Pickup status, order amount, scrap rates, ya selling tips ke baare mein poochhein. Photo upload karke scrap estimate bhi lein.</p></div>}
+            {messages.map((message, index) => <div key={index} className={`max-w-[88%] rounded-2xl px-3 py-2.5 text-sm ${message.role === 'user' ? 'ml-auto whitespace-pre-wrap bg-emerald-600 text-white' : 'bg-slate-100 text-slate-800'}`}>{message.role === 'assistant' ? <ChatMarkdown content={message.content} /> : message.content}</div>)}
+            {busy && <div className="text-xs text-slate-500">Checking your question...</div>}
+            {analysisImage && <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-slate-800"><img src={analysisImage} alt="Uploaded scrap for analysis" className="mb-3 max-h-48 w-full rounded-xl bg-white object-contain" />{analysis ? <><div className="font-bold text-emerald-800">{analysis.scrapType}{analysis.subTypes?.length ? ' - ' + analysis.subTypes.join(', ') : ''}</div><div className="mt-1">Approx. weight: {analysis.weightRange.min} to {analysis.weightRange.max} kg</div><div>Estimated value: {formatCurrency(analysis.estimatedValue.min)} to {formatCurrency(analysis.estimatedValue.max)}</div><div className="mt-1 text-xs text-slate-600">Rate: {formatCurrency(analysis.pricePerKg)}/kg - Confidence: {analysis.confidence}%</div>{analysis.description && <p className="mt-2 text-xs">{analysis.description}</p>}<p className="mt-2 text-xs text-slate-600">Photo estimates are approximate; final amount depends on physical weighing and dealer rate.</p></> : <p className="text-xs text-slate-600">{busy ? 'Analyzing this photo...' : 'Photo uploaded.'}</p>}</div>}
+          </div>
+          {error && <p role="alert" className="px-4 pb-2 text-xs text-red-700">{error}</p>}
+          <div className="border-t border-slate-100 p-3">
+            <form onSubmit={sendMessage} className="flex items-center gap-2">
+              <label className={`flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 ${busy ? 'pointer-events-none opacity-50' : ''}`} title="Analyze a scrap photo"><ImagePlus className="h-4 w-4" /><input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={busy} onChange={analyzeImage} /></label>
+              <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ask about your pickup..." maxLength={2000} className="min-w-0 flex-1 rounded-full border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-emerald-500" />
+              <button type="submit" disabled={!draft.trim() || busy} aria-label="Send message" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white disabled:opacity-50"><Send className="h-4 w-4" /></button>
+            </form>
+            <p className="mt-2 text-center text-[10px] text-slate-400">AI estimates may be inaccurate. Confirm price and weight at pickup.</p>
+          </div>
+        </>}
+      </section>}
+      <button type="button" onClick={() => setOpen((value) => !value)} aria-label={open ? 'Close AI assistant' : 'Open AI assistant'} className="flex h-14 items-center gap-2 rounded-full bg-emerald-700 px-5 font-semibold text-white shadow-lg hover:bg-emerald-600"><Bot className="h-5 w-5" /><span>AI Help</span></button>
+    </div>
+  )
+}
 function ProtectedRoute({ children, allowedRole }) {
   const { user, loading, configured } = useAuth()
 
